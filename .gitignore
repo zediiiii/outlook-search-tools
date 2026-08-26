@@ -1,0 +1,14 @@
+# ---------------------------------------------------------------------------
+# NEVER COMMIT PULLED EMAIL CONTENT.
+# The script writes real message bodies, names and addresses of real people
+# into context/. That is private correspondence -- keep it off GitHub.
+# ---------------------------------------------------------------------------
+context/
+*.eml
+*.msg
+*.pst
+
+# Local scratch
+*.log
+tmp/
+.vscode/
