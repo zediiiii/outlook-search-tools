@@ -9,8 +9,9 @@
     Catch up on a person   Every email with them over the last N days, browsable here and
                            copied to the clipboard as one document to paste into Claude.
 
-    Uses Find-Email.ps1 and Get-EmailContext.ps1 from the same folder. Read-only: nothing is
-    ever sent, moved, or deleted.
+    Uses Find-Email.ps1, FadoeIndex.ps1 and Get-EmailContext.ps1 from the same folder. The
+    search index updates in the background when the window opens and stays loaded, so
+    searches take well under a second. Read-only: nothing is ever sent, moved, or deleted.
 
 .PARAMETER InstallShortcut
     Put "FADOE" shortcuts on your desktop and in the Start menu that open this window, then
@@ -37,7 +38,7 @@ param(
     [int]    $ScreenshotDays = 180
 )
 
-$FadoeVersion = '1.0.0'
+$FadoeVersion = '1.1.0'
 
 $ErrorActionPreference = 'Stop'
 $here      = $PSScriptRoot
@@ -171,6 +172,18 @@ if ($InstallShortcut) {
     return
 }
 
+# ------------------------------------------------------- single instance ----
+# A second launch (double-click during a slow start, desktop + Start menu...) just brings the
+# window that's already open to the front. Two copies would double the load on Outlook.
+if (-not $ScreenshotPath) {
+    $createdNew = $false
+    $script:instanceLock = New-Object System.Threading.Mutex($true, 'Local\FADOE-FindADamnOutlookEmail', [ref]$createdNew)
+    if (-not $createdNew) {
+        try { [void](New-Object -ComObject WScript.Shell).AppActivate('FADOE - Find A Damn Outlook Email') } catch { }
+        exit 0
+    }
+}
+
 # -------------------------------------------------------------- splash ----
 # Runs on its own thread so its progress bar keeps moving while the main window loads.
 # It stays up at least ~1 second so it never just flickers.
@@ -178,7 +191,7 @@ $splashXaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="FADOE" Width="560" Height="340" WindowStyle="None" AllowsTransparency="True" Background="Transparent"
-        ResizeMode="NoResize" WindowStartupLocation="CenterScreen" Topmost="True" ShowInTaskbar="True">
+        ResizeMode="NoResize" WindowStartupLocation="CenterScreen" Topmost="True" ShowInTaskbar="False">
   <Border Margin="20" CornerRadius="18">
     <Border.Effect><DropShadowEffect BlurRadius="26" ShadowDepth="5" Opacity="0.5" Color="Black"/></Border.Effect>
     <Border.Background>
@@ -273,8 +286,37 @@ if (-not $ScreenshotPath) {
     } catch { }
 }
 
-Add-Type -Namespace FadoeNative -Name Win -MemberDefinition @'
-[DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+namespace FadoeNative {
+    public static class Win {
+        [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+        delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+        [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder s, int n);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder s, int n);
+
+        // Title of a visible message box ("#32770" dialog) belonging to the process, or null.
+        // Reminders, open messages and the main window are ordinary windows and don't count.
+        public static string FindDialog(int pid) {
+            string found = null;
+            EnumWindows(delegate (IntPtr h, IntPtr l) {
+                uint p; GetWindowThreadProcessId(h, out p);
+                if (p != (uint)pid || !IsWindowVisible(h)) return true;
+                StringBuilder c = new StringBuilder(64); GetClassName(h, c, 64);
+                if (c.ToString() != "#32770") return true;
+                StringBuilder t = new StringBuilder(256); GetWindowText(h, t, 256);
+                found = t.ToString(); return false;
+            }, IntPtr.Zero);
+            return found;
+        }
+    }
+}
 '@
 
 class FadoeRow {
@@ -679,6 +721,7 @@ $xaml = @'
                    Text="Collects every email sent to or from this person - full text and dates - ready to paste into Claude for a summary."/>
         <ProgressBar x:Name="CatchProgress" VerticalAlignment="Bottom" Margin="0,0,0,-7" Maximum="100" Visibility="Hidden"/>
       </Grid>
+      <WrapPanel x:Name="CatchSuggest" Grid.Row="2" Margin="0,0,0,6" Visibility="Collapsed"/>
       <Border x:Name="CatchSummary" Grid.Row="2" Style="{StaticResource Card}" Padding="18,14" Margin="0,0,0,14" Visibility="Collapsed">
         <Grid>
           <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -912,40 +955,118 @@ $jobTimer.Add_Tick({
     $j = $script:job
     if (-not $j) { $jobTimer.Stop(); return }
     $prog = $j.PS.Streams.Progress
-    if ($prog.Count -gt 0) {
+    if ($prog.Count -ne $j.SeenProgress) {
+        $j.SeenProgress = $prog.Count
+        $j.LastProgress = Get-Date
         $rec = $prog[$prog.Count - 1]
         if ($rec.PercentComplete -ge 0) { $j.Bar.Value = $rec.PercentComplete }
-        $f = Get-FolderName $rec.StatusDescription
-        if ($f) { $j.Status.Text = '{0} {1} ...' -f $j.Label, $f }
+        $desc = [string]$rec.StatusDescription
+        if ($desc -match '\\') { $j.Status.Text = '{0} {1} ...' -f $j.Label, (Get-FolderName $desc) }
+        elseif ($desc) { $j.Status.Text = $desc + ' ...' }
+    }
+    # Watchdog: classic Outlook runs invisibly for FADOE, so if it stops to show a message
+    # (e.g. "exhausted all shared resources") everything waits on a window nobody can see.
+    if (-not $j.Warned -and ((Get-Date) - $j.LastProgress).TotalSeconds -ge 12 -and ((Get-Date) - $j.LastCheck).TotalSeconds -ge 3) {
+        $j.LastCheck = Get-Date
+        $stuck = Get-OutlookBlocker
+        if ($stuck) {
+            $j.Warned = $true
+            $j.Status.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'Warn')
+            $j.Status.Text = "Classic Outlook has paused to show a message ('" + $stuck.MainWindowTitle + "'). Click OK in that window. " +
+                             "If it says 'exhausted all shared resources', close Outlook completely (new Outlook too), reopen it, then reopen FADOE."
+            try { [void](New-Object -ComObject WScript.Shell).AppActivate($stuck.Id) } catch { }
+        }
     }
     if ($j.Handle.IsCompleted) {
         $jobTimer.Stop()
         $out = $null; $errs = @()
         try { $out = $j.PS.EndInvoke($j.Handle) } catch { $errs += $_.Exception.Message }
         foreach ($e in $j.PS.Streams.Error) { $errs += $e.ToString() }
-        try { $j.PS.Dispose(); $j.RS.Close() } catch { }
+        try { $j.PS.Dispose() } catch { }
         $script:job = $null
         $j.Bar.Visibility = 'Hidden'
+        $j.Status.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'Sub')
         & $j.OnDone $out $errs
+        if (-not $script:job -and $script:pending) { $p = $script:pending; $script:pending = $null; & $p }
     }
 })
 
-function Start-Work([string]$scriptPath, [hashtable]$params, $bar, $status, [string]$label, [scriptblock]$onDone) {
+# Classic Outlook runs invisibly for FADOE. If it stops on a message box (e.g. "Outlook Data
+# File: exhausted all shared resources"), everything waits on a window nobody is looking at.
+# Only real message boxes count -- reminders and reopened message windows don't block anything.
+function Get-OutlookBlocker {
+    foreach ($o in @(Get-Process OUTLOOK -ErrorAction SilentlyContinue)) {
+        $t = $null
+        try { $t = [FadoeNative.Win]::FindDialog($o.Id) } catch { }
+        if ($null -ne $t) { return [pscustomobject]@{ Id = $o.Id; MainWindowTitle = $(if ($t) { $t } else { 'Microsoft Outlook' }) } }
+    }
+}
+
+# One long-lived engine runspace (one thread, so Outlook's COM objects stay valid). The search
+# index and the Outlook connection stay loaded in it between searches.
+$script:engine = $null
+function Get-Engine {
+    if ($script:engine -and $script:engine.RunspaceStateInfo.State -eq 'Opened') { return $script:engine }
     $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
     $iss.ExecutionPolicy = 'Bypass'
     $rs = [runspacefactory]::CreateRunspace($iss)
     $rs.ApartmentState = 'STA'
     $rs.ThreadOptions = 'ReuseThread'
     $rs.Open()
+    $script:engine = $rs
+    $rs
+}
+
+function Start-Work([string]$scriptPath, [hashtable]$params, $bar, $status, [string]$label, [scriptblock]$onDone, [string]$kind = 'work') {
     $ps = [powershell]::Create()
-    $ps.Runspace = $rs
+    $ps.Runspace = Get-Engine
     [void]$ps.AddCommand($scriptPath)
     foreach ($k in $params.Keys) { [void]$ps.AddParameter($k, $params[$k]) }
     $bar.Value = 0
     $bar.Visibility = 'Visible'
     $status.Text = $label + ' ...'
-    $script:job = @{ PS = $ps; RS = $rs; Handle = $ps.BeginInvoke(); Bar = $bar; Status = $status; Label = $label; OnDone = $onDone }
+    $now = Get-Date
+    $script:job = @{ PS = $ps; Handle = $ps.BeginInvoke(); Bar = $bar; Status = $status; Label = $label; OnDone = $onDone; Kind = $kind
+                     SeenProgress = 0; LastProgress = $now; LastCheck = $now; Warned = $false }
     $jobTimer.Start()
+}
+
+# The index updates in the background when the window opens. A search started meanwhile waits
+# for it instead of being refused.
+$script:pending = $null
+function Wait-ForIndex([scriptblock]$then, $status) {
+    if ($script:job -and $script:job.Kind -eq 'sync') {
+        $script:pending = $then
+        $status.Text = 'Finishing the search index update first - this will start right after ...'
+        return $true
+    }
+    return [bool]$script:job
+}
+
+$onSyncDone = {
+    param($out, $errs)
+    $s = @($out | Where-Object { $_ -and $_.PSObject.Properties['NewMessages'] }) | Select-Object -First 1
+    if ($s) {
+        $FindStatus.Text = ('Search index ready: {0:N0} messages from the last year. Type what you remember and press Enter.' -f $s.Messages)
+    } elseif ($errs.Count) {
+        $FindStatus.Text = 'Could not update the search index: ' + $errs[0]
+    }
+}
+
+function Start-IndexSync {
+    if ($script:job) { return }
+    $stuck = Get-OutlookBlocker
+    if ($stuck) {
+        $FindStatus.SetResourceReference([System.Windows.Controls.TextBlock]::ForegroundProperty, 'Warn')
+        $FindStatus.Text = "Classic Outlook is showing a message ('" + $stuck.MainWindowTitle + "') and won't answer until it's closed. " +
+                           "Click OK there; if it says 'exhausted all shared resources', close Outlook completely (new Outlook too), reopen it, then reopen FADOE."
+        try { [void](New-Object -ComObject WScript.Shell).AppActivate($stuck.Id) } catch { }
+        return
+    }
+    $first = -not (Test-Path (Join-Path $env:LOCALAPPDATA 'FADOE'))
+    Start-Work $findTool @{ SyncOnly = $true } $FindProgress $FindStatus `
+        $(if ($first) { 'Building the search index for the first time (a couple of minutes, once)' } else { 'Updating the search index' }) `
+        $onSyncDone 'sync'
 }
 
 function Request-Snapshot {
@@ -1023,7 +1144,7 @@ $onFindDone = {
 }
 
 function Start-Find {
-    if ($script:job) { return }
+    if (Wait-ForIndex { Start-Find } $FindStatus) { return }
     $words = $SearchBox.Text.Trim()
     if (-not $words) { [void]$SearchBox.Focus(); return }
     $params = @{ Search = $words; Top = 25; NoClipboard = $true; PassThru = $true }
@@ -1055,10 +1176,31 @@ $onCatchDone = {
     param($out, $errs)
     $GatherBtn.IsEnabled = $true
     $res = @($out | Where-Object { $_ -and $_.PSObject.Properties['Messages'] }) | Select-Object -First 1
-    if (-not $res) {
+    $CatchSuggest.Children.Clear()
+    $CatchSuggest.Visibility = 'Collapsed'
+    if (-not $res -or @($res.Messages).Count -eq 0) {
         $CatchSummary.Visibility = 'Collapsed'
-        $CatchStatus.Text = if ($errs.Count) { 'Something went wrong: ' + $errs[0] }
-                            else { 'No emails found with ' + ($script:ctxPeople -join ', ') + '. Try just their last name, or more days.' }
+        # @( ) around the whole thing: a one-item result would otherwise unroll to a bare object with no .Count
+        $sugg = @(if ($res -and $res.PSObject.Properties['Suggestions']) { $res.Suggestions | Where-Object { $_ } })
+        if (-not $res -and $errs.Count) {
+            $CatchStatus.Text = 'Something went wrong: ' + $errs[0]
+        } elseif ($sugg.Count) {
+            $CatchStatus.Text = 'No emails found with ' + ($script:ctxPeople -join ', ') + '.  Did you mean one of these people you''ve emailed?'
+            foreach ($s in $sugg) {
+                $b = New-Object System.Windows.Controls.Button
+                $b.Style = $window.FindResource('Secondary')
+                $b.Margin = [System.Windows.Thickness]::new(0, 0, 8, 8)
+                $b.Tag = $s.Address
+                $label = if ($s.Name -and $s.Name -ne $s.Address) { $s.Name + $dot + $s.Address } else { $s.Address }
+                $b.Content = $label + $dot + ('{0} emails' -f $s.Messages)
+                $b.ToolTip = 'Catch up on ' + $s.Address
+                $b.Add_Click({ param($src, $e) $PersonBox.Text = [string]$src.Tag; Start-CatchUp })
+                [void]$CatchSuggest.Children.Add($b)
+            }
+            $CatchSuggest.Visibility = 'Visible'
+        } else {
+            $CatchStatus.Text = 'No emails found with ' + ($script:ctxPeople -join ', ') + '. Try just their last name, or more days.'
+        }
         if ($ScreenshotPath) { Request-Snapshot }
         return
     }
@@ -1098,7 +1240,7 @@ $onCatchDone = {
 }
 
 function Start-CatchUp {
-    if ($script:job) { return }
+    if (Wait-ForIndex { Start-CatchUp } $CatchStatus) { return }
     $who = $PersonBox.Text.Trim()
     if (-not $who) { [void]$PersonBox.Focus(); return }
     $days = 180; $d = 0
@@ -1111,6 +1253,7 @@ function Start-CatchUp {
     if (Test-Path $out) { Remove-Item $out }   # same person, same day: regenerate
     $GatherBtn.IsEnabled = $false
     $CatchSummary.Visibility = 'Collapsed'
+    $CatchSuggest.Visibility = 'Collapsed'
     $CatchList.ItemsSource = $null
     Show-CatchDetail $null
     $CatchCount.Text = 'Messages'
@@ -1170,7 +1313,11 @@ $window.Add_PreviewKeyDown({
     }
 })
 $window.Add_Loaded({ [void]$SearchBox.Focus() })
-$window.Add_ContentRendered({ $splash.Close = $true; [void]$window.Activate() })
+$window.Add_ContentRendered({
+    $splash.Close = $true
+    [void]$window.Activate()
+    if (-not $ScreenshotPath) { Start-IndexSync }
+})
 $window.Add_Closed({
     if ($script:job) { try { $script:job.PS.Stop() } catch { }; $script:forceExit = $true }
 })

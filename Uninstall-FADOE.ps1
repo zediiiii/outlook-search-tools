@@ -31,9 +31,19 @@ foreach ($folder in 'Desktop', 'Programs') {
     }
 }
 
-foreach ($f in 'FADOE.ps1', 'Find-Email.ps1', 'Get-EmailContext.ps1', 'README.md', 'FADOE.ico', '.fadoe-install') {
+foreach ($f in 'FADOE.ps1', 'FadoeIndex.ps1', 'Find-Email.ps1', 'Get-EmailContext.ps1', 'README.md', 'FADOE.ico', '.fadoe-install') {
     $p = Join-Path $InstallDir $f
     if (Test-Path $p) { Remove-Item -LiteralPath $p -Force }
+}
+
+# The search index is a cache holding copies of your email text -- remove it too.
+$cacheRoot = Join-Path $env:LOCALAPPDATA 'FADOE'
+if (Test-Path $cacheRoot) {
+    Get-ChildItem -LiteralPath $cacheRoot -Directory -Filter 'index-*' | ForEach-Object {
+        Remove-Item -LiteralPath $_.FullName -Recurse -Force
+    }
+    if (-not (Get-ChildItem -LiteralPath $cacheRoot -Force)) { Remove-Item -LiteralPath $cacheRoot }
+    Write-Host 'Removed the search index.'
 }
 
 $ctx = Join-Path $InstallDir 'context'

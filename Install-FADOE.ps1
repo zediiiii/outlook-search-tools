@@ -24,7 +24,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $src   = $PSScriptRoot
-$files = 'FADOE.ps1', 'Find-Email.ps1', 'Get-EmailContext.ps1', 'Uninstall-FADOE.ps1', 'README.md'
+$files = 'FADOE.ps1', 'FadoeIndex.ps1', 'Find-Email.ps1', 'Get-EmailContext.ps1', 'Uninstall-FADOE.ps1', 'README.md'
 
 Write-Host ''
 Write-Host '  Installing FADOE - Find A Damn Outlook Email' -ForegroundColor Cyan

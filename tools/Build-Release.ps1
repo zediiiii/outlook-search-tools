@@ -16,7 +16,7 @@ $ver  = ([regex]::Match((Get-Content -Raw (Join-Path $root 'FADOE.ps1')), "Fadoe
 if (-not $ver) { throw 'Could not read $FadoeVersion from FADOE.ps1' }
 
 $files = 'Install.cmd', 'Install-FADOE.ps1', 'Uninstall-FADOE.ps1',
-         'FADOE.ps1', 'Find-Email.ps1', 'Get-EmailContext.ps1', 'README.md'
+         'FADOE.ps1', 'FadoeIndex.ps1', 'Find-Email.ps1', 'Get-EmailContext.ps1', 'README.md'
 
 $dist  = Join-Path $root 'dist'
 $name  = "FADOE-v$ver"

@@ -43,7 +43,15 @@ your mail through classic Outlook in the background.
   paste into Claude. Buttons to copy it again, open the file, or show it in its folder.
 
 `Ctrl+1` / `Ctrl+2` switch tabs. Searches run in the background, so the window stays
-responsive and shows which folder it's on.
+responsive and shows which folder it's on. The search index loads when the window opens and
+stays loaded: searches take about half a second, catch-ups a few seconds.
+
+- **One copy at a time.** Opening FADOE again just brings the open window to the front.
+- **Typos get suggestions.** A catch-up that finds nothing offers the closest people you've
+  actually emailed ("Did you mean Jane Doe · jdoe@example.org?") as one-click buttons.
+- **It tells you if Outlook gets stuck.** Classic Outlook runs invisibly for FADOE; if it
+  stops on a message box, FADOE's status line turns amber and brings that box forward
+  instead of silently waiting.
 
 Running from a clone of this repo instead of the installer? Create the desktop and Start
 menu shortcuts once, then just double-click:
@@ -88,13 +96,17 @@ ever want it, but it's the wrong default for catching up.
 | `-TrimQuoted` | Strip quoted reply history. Much smaller file, some text lost. |
 | `-IncludeDeleted` | Also scan Deleted Items, Junk, Drafts. |
 | `-AllStores` | Also scan other mailboxes / PSTs / online archives on the profile. |
+| `-NoIndex` | Scan Outlook directly instead of using the search index. |
 
 ### What it does
 
-Walks every mail folder in your mailbox (not just Inbox and Sent — it picks up anything
-you've filed into subfolders), date-filters server-side, then keeps messages where the
-person appears as sender, To, or CC. Exchange `/o=...` internal addresses are resolved to
-real SMTP addresses. Duplicates filed in two folders are collapsed.
+Uses the search index (below) to find every message where the person is the sender, or on
+To, Cc or Bcc, then opens only those messages for their full text and attachments — a few
+seconds instead of a minute. For more than a year back, or with `-NoIndex`, it walks every
+mail folder instead (not just Inbox and Sent — anything you've filed into subfolders too).
+Exchange `/o=...` addresses are resolved to real SMTP addresses, including outside people
+your organization added to its address book. Duplicates filed in two folders are collapsed.
+If nobody matches, it suggests the closest names/addresses you've actually emailed.
 
 Output is chronological, oldest first: a header with counts and date range, an index table
 of every message, then the complete untruncated body of each one with sender, recipients,
@@ -138,6 +150,25 @@ Ranking: words the sender wrote beat words that only appear in the subject; all 
 in the subject line ranks highest; words close together (a phrase) beat scattered mentions;
 newsletters and mass mailings sink below real correspondence; then newest first.
 
+### The search index
+
+Reading every message through Outlook took ~30 seconds per search, so `FadoeIndex.ps1` keeps
+a local index instead: each message from the last year is read **once** (about 4 minutes
+for 10,000 messages, the first time only, with progress shown) and a small record is kept — sender, recipients,
+subject, and the text the sender actually wrote. After that:
+
+- Each search first checks every folder's message count; only folders that changed get
+  re-listed (through Outlook's fast table view), and only genuinely new messages are opened.
+- A search from the command line takes ~2 seconds. In the FADOE window the index stays
+  loaded, so searches take a fraction of a second; the window refreshes the index in the
+  background when it opens, and a search started meanwhile simply waits for it.
+
+| Flag | Meaning |
+|---|---|
+| `-SyncOnly` | Just build or update the index. |
+| `-Rebuild` | Re-list every folder, not just changed ones. |
+| `-NoSync` | Search the index as-is, without checking Outlook first. |
+
 ## Notes
 
 - Requires the **classic** Outlook desktop app to be *installed* with your mail profile set
@@ -148,6 +179,17 @@ newsletters and mass mailings sink below real correspondence; then newest first.
   can't see older mail. New Outlook's own search still covers everything on the server.
 - Shared mailboxes on your profile are searched too. If a result lives in one, click a
   folder in that mailbox in new Outlook before pasting the search string.
+- While FADOE runs, classic Outlook runs invisibly in the background, so its reminder
+  pop-ups can appear alongside new Outlook's. Classic Outlook may also reopen message
+  windows that were open the last time it closed.
+
+### If Outlook says it has "exhausted all shared resources"
+
+Classic Outlook and new Outlook share a pool of mail-system resources whenever new Outlook
+has a PST file open. The pool only resets once **every** Outlook has closed. If that
+message appears: click OK, close new Outlook completely (including its tray icon), reopen
+it, then reopen FADOE. Removing PST files you don't need from new Outlook makes this much
+less likely. FADOE itself releases every Outlook object as soon as it's done with it.
 
 ## Making a release
 
@@ -160,6 +202,11 @@ powershell -ExecutionPolicy Bypass -File "tools\Build-Release.ps1"
 That writes `dist\FADOE-v<version>.zip`; attach it to a GitHub release tagged `v<version>`.
 
 ## Privacy
+
+The **search index** lives in `%LOCALAPPDATA%\FADOE\` inside your Windows profile and holds
+copies of your email text (what each sender wrote, plus names and addresses). It never
+leaves your PC. Delete that folder any time — it rebuilds on the next search — and the
+uninstaller removes it.
 
 The files this script writes contain **real correspondence** — full message bodies plus the
 names and addresses of everyone on each thread. `context/` is gitignored for that reason.
