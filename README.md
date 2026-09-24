@@ -1,4 +1,4 @@
-# Email Context
+# FADOE — Outlook Search Tools
 
 Two small PowerShell tools for getting at what's buried in your Outlook mailbox:
 
@@ -14,7 +14,7 @@ app registration, no IT ticket. Read-only — they never send, move, or delete a
 ## Install (any Windows PC)
 
 1. Download the latest **`FADOE-vX.Y.Z.zip`** from
-   [Releases](https://github.com/zediiiii/outlook-context/releases/latest).
+   [Releases](https://github.com/zediiiii/outlook-search-tools/releases/latest).
 2. Extract it, open the extracted folder, and double-click **`Install.cmd`**.
 3. Open **FADOE** from the desktop shortcut or the Start menu.
 
