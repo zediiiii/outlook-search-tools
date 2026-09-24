@@ -11,28 +11,55 @@ Two small PowerShell tools for getting at what's buried in your Outlook mailbox:
 Both use Outlook COM automation against your local desktop profile. No API keys, no Azure
 app registration, no IT ticket. Read-only — they never send, move, or delete anything.
 
-## FADOE: one menu for both (Find A Damn Outlook Email)
+## Install (any Windows PC)
 
-`Email-Tools.ps1` puts both tools behind a simple menu, so you never have to type a command:
+1. Download the latest **`FADOE-vX.Y.Z.zip`** from
+   [Releases](https://github.com/zediiiii/outlook-context/releases/latest).
+2. Extract it, open the extracted folder, and double-click **`Install.cmd`**.
+3. Open **FADOE** from the desktop shortcut or the Start menu.
 
-```
-    1   Find an email
-    2   Catch up on a person
-    Q   Quit
-```
-
-- **Find an email** asks what words you remember (and optionally who sent it), shows the
-  results, and lets you type any result's number to copy its new Outlook search string.
-- **Catch up on a person** asks for their address and how many days back, writes the file,
-  and puts the full text on your clipboard — paste it straight into Claude.
-
-Create a desktop shortcut once, then just double-click it:
+It installs to `%LOCALAPPDATA%\Programs\FADOE` for your Windows account only — no admin
+rights needed. To upgrade, download the newer zip and run `Install.cmd` again. To remove it:
 
 ```bash
-powershell -ExecutionPolicy Bypass -File "Email-Tools.ps1" -InstallShortcut
+powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\Programs\FADOE\Uninstall-FADOE.ps1"
 ```
 
-The two scripts below still work on their own from the command line.
+**Requirements:** Windows 10 or 11 with the **classic** Outlook desktop app installed and
+signed in to your mailbox once. You can keep using new Outlook day to day — FADOE just reads
+your mail through classic Outlook in the background.
+
+## FADOE: one window for both (Find A Damn Outlook Email)
+
+`FADOE.ps1` opens a proper window (follows Windows light/dark mode) with two tabs:
+
+- **Find an email** — type what you remember, press Enter. Results on the left, the whole
+  message on the right with your words highlighted and links clickable. Buttons to copy
+  the new Outlook search string, or **open just that one message** in its own window —
+  which sidesteps conversation grouping entirely, no Outlook settings changed.
+  Double-click a result to copy its search.
+- **Catch up on a person** — enter their address and how many days back. Every message is
+  listed and readable in the window, and the whole document is put on your clipboard to
+  paste into Claude. Buttons to copy it again, open the file, or show it in its folder.
+
+`Ctrl+1` / `Ctrl+2` switch tabs. Searches run in the background, so the window stays
+responsive and shows which folder it's on.
+
+Running from a clone of this repo instead of the installer? Create the desktop and Start
+menu shortcuts once, then just double-click:
+
+```bash
+powershell -ExecutionPolicy Bypass -File "FADOE.ps1" -InstallShortcut
+```
+
+`-Theme light` or `-Theme dark` overrides the Windows setting. The two scripts below
+still work on their own from the command line.
+
+**Why "open just this message" exists:** with conversation grouping on, new Outlook
+decides which message of a thread to show, and no search operator can change that. The
+search string narrows things to the right thread and day; opening the single message
+skips the thread altogether. That window comes from classic Outlook, because new Outlook
+can't be scripted.
 
 ## Get-EmailContext: catch up on one person
 
@@ -121,6 +148,16 @@ newsletters and mass mailings sink below real correspondence; then newest first.
   can't see older mail. New Outlook's own search still covers everything on the server.
 - Shared mailboxes on your profile are searched too. If a result lives in one, click a
   folder in that mailbox in new Outlook before pasting the search string.
+
+## Making a release
+
+Bump `$FadoeVersion` at the top of `FADOE.ps1`, commit, then:
+
+```bash
+powershell -ExecutionPolicy Bypass -File "tools\Build-Release.ps1"
+```
+
+That writes `dist\FADOE-v<version>.zip`; attach it to a GitHub release tagged `v<version>`.
 
 ## Privacy
 

@@ -12,3 +12,7 @@ context/
 *.log
 tmp/
 .vscode/
+
+# Generated: shortcut icon (made by FADOE.ps1 -InstallShortcut) and release zips
+FADOE.ico
+dist/

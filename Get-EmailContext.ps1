@@ -39,6 +39,10 @@
     Only keep true back-and-forth: messages the person sent, or that you sent to them.
     Drops third-party blasts where you and they merely shared a distribution list.
 
+.PARAMETER PassThru
+    Also return an object with the output file path and every message found, so another
+    script can show them. Used by FADOE.ps1.
+
 .EXAMPLE
     .\Get-EmailContext.ps1 -Person jdoe@example.org -Days 180
 
@@ -57,7 +61,8 @@ param(
     [switch]   $IncludeDeleted,
     [switch]   $AllStores,
     [switch]   $TrimQuoted,
-    [switch]   $DirectOnly
+    [switch]   $DirectOnly,
+    [switch]   $PassThru
 )
 
 $ErrorActionPreference = 'Stop'
@@ -333,3 +338,7 @@ $kb = (Get-Item $OutFile).Length / 1KB
 Write-Host ''
 Write-Host "Wrote $OutFile"
 Write-Host ('Size: {0:N0} KB (roughly {1:N0}k tokens)' -f $kb, ((Get-Item $OutFile).Length / 4000))
+
+if ($PassThru) {
+    [pscustomobject]@{ OutFile = $OutFile; Since = $Since; Messages = $hits }
+}

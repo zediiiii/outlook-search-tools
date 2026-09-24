@@ -33,8 +33,9 @@
     Don't copy the top result's search string to the clipboard.
 
 .PARAMETER PassThru
-    Also return the results as objects (Number, When, Sender, Subject, Query) so another
-    script can use them. Used by Email-Tools.ps1.
+    Also return the results as objects (when, sender, subject, the sender's own text, links,
+    thread position, the Outlook search string, IDs) so another script can use them.
+    Used by FADOE.ps1.
 
 .EXAMPLE
     .\Find-Email.ps1 'kickoff video'
@@ -338,6 +339,8 @@ Write-Host ("{0} conversation(s) contain: {1}   (since {2}; showing {3})" -f `
     @($cands | Group-Object Conv).Count, (($terms | ForEach-Object { "'$_'" }) -join ' + '),
     $Since.ToString('MMM d, yyyy'), $results.Count) -ForegroundColor Cyan
 
+$convCount = @($cands | Group-Object Conv).Count
+$rows = New-Object System.Collections.ArrayList
 $n = 0
 foreach ($r in $results) {
     $n++
@@ -375,15 +378,32 @@ foreach ($r in $results) {
     if ($n -eq 1 -and -not $NoClipboard) {
         try { Set-Clipboard -Value $q; Write-Host '              (copied to clipboard)' -ForegroundColor DarkGray } catch { }
     }
+
+    [void]$rows.Add([pscustomobject]@{
+        Number             = $n
+        When               = $r.When
+        Sender             = $r.SenderName
+        SenderAddr         = $r.SenderAddr
+        To                 = $r.To
+        Subject            = $r.Subject
+        Folder             = $r.Folder
+        Mailbox            = $r.StoreName
+        IsPrimary          = $r.IsPrimary
+        Position           = $(if ($pos) { $pos.Pos } else { $null })
+        ThreadCount        = $(if ($pos) { $pos.Total } else { $null })
+        IsBulk             = $r.IsBulk
+        OwnHits            = $r.OwnHits
+        Text               = $r.Own
+        Links              = $links
+        Query              = $q
+        Terms              = $terms
+        EntryID            = $r.EntryID
+        StoreID            = $r.StoreID
+        TotalConversations = $convCount
+    })
 }
 Write-Host ''
 Write-Host 'Paste a Search line into new Outlook''s search box. If conversations are grouped, open the' -ForegroundColor DarkGray
 Write-Host 'thread and look for the message sent at the time shown above.' -ForegroundColor DarkGray
 
-if ($PassThru) {
-    $k = 0
-    foreach ($r in $results) {
-        $k++
-        [pscustomobject]@{ Number = $k; When = $r.When; Sender = $r.SenderName; Subject = $r.Subject; Query = (Get-OutlookQuery $r) }
-    }
-}
+if ($PassThru) { $rows }
